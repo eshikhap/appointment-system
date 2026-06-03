@@ -1,0 +1,31 @@
+# render.yaml
+# Deploy this file by connecting your GitHub repo to Render.
+# Render auto-detects this file and sets up the service.
+
+services:
+  - type: web
+    name: appointment-reminder-api
+    env: node
+    region: oregon
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 4000
+      # Set these in the Render dashboard (not here — secrets shouldn't be in git)
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM_NUMBER
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
