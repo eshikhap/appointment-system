@@ -4,6 +4,12 @@
 
 ---
 
+## 📸 Live Demo
+
+- **Frontend:** `https://dancing-rolypoly-c22480.netlify.app`
+- **API Health:** `https://appointment-api-8m0k.onrender.com/health`
+
+---
 
 ## ✨ Features
 
@@ -115,7 +121,68 @@ appointment-system/
 
 ---
 
+## 🗄 Database Setup (Supabase)
 
+### 1. Create a Supabase project
+
+Go to [supabase.com](https://supabase.com), create a new project, and note your **Project URL** and **Service Role Key** (under Settings → API).
+
+### 2. Run this SQL in the SQL Editor
+
+```sql
+-- appointments table
+CREATE TABLE IF NOT EXISTS appointments (
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  customer_name       TEXT NOT NULL CHECK (char_length(customer_name) BETWEEN 2 AND 100),
+  phone_number        TEXT NOT NULL CHECK (phone_number ~ '^\+[1-9]\d{6,14}$'),
+  appointment_time    TIMESTAMPTZ NOT NULL,
+  notes               TEXT CHECK (char_length(notes) <= 500),
+
+  -- Twilio tracking
+  twilio_sid          TEXT,
+  reminder_sent       BOOLEAN NOT NULL DEFAULT FALSE,
+  reminder_sent_at    TIMESTAMPTZ,
+  reminder_twilio_sid TEXT,
+
+  -- Audit
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Auto-update updated_at on any row change
+CREATE OR REPLACE FUNCTION update_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER appointments_updated_at
+  BEFORE UPDATE ON appointments
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- Index for the scheduler query (reminder_sent + appointment_time)
+CREATE INDEX idx_appointments_reminder
+  ON appointments (reminder_sent, appointment_time)
+  WHERE reminder_sent = FALSE;
+
+-- Index for dashboard ordering
+CREATE INDEX idx_appointments_time
+  ON appointments (appointment_time ASC);
+```
+
+### 3. Enable Row Level Security
+
+Since the backend uses the service role key (which bypasses RLS), you can enable RLS to block direct anonymous access:
+
+```sql
+ALTER TABLE appointments ENABLE ROW LEVEL SECURITY;
+-- Service role key bypasses RLS — no policies needed for the backend.
+-- Add policies if you ever add user authentication.
+```
+
+---
 
 ## ⚙️ Environment Variables
 
@@ -176,6 +243,49 @@ The Vite dev server proxies `/api/*` requests to `localhost:4000`, so no CORS is
 ---
 
 
+
+## 📱 Twilio Setup
+
+### Trial Account Setup
+
+1. Sign up at [twilio.com](https://twilio.com) (free trial gives ~$15 credit).
+2. Verify your personal phone number (you can only SMS verified numbers on trial).
+3. Get a Twilio phone number (free with trial).
+4. Copy **Account SID**, **Auth Token**, and your Twilio number.
+5. Use E.164 format for all numbers: `+12345678900`.
+
+### WhatsApp 
+
+To use WhatsApp instead of SMS, change `TWILIO_FROM_NUMBER` to `whatsapp:+14155238886` (Twilio sandbox) and prefix the recipient number with `whatsapp:` in `twilioService.js`.
+
+### Simulation Mode
+
+If you don't have Twilio credentials, the app runs in **simulation mode** — messages are logged to the console with full details of what *would* be sent. The send logic is identical; only the actual API call is skipped. This lets reviewers verify the implementation is correct without real credentials.
+
+---
+
+## 🧪 Testing Checklist
+
+### Manual End-to-End Test
+
+- [ ] Fill in form with valid name, phone (+E.164), and future date → Submit
+- [ ] Verify 201 response and appointment appears in dashboard
+- [ ] Check Twilio console for confirmation SMS (or server logs for simulation)
+- [ ] Verify `appointment_time` stored in Supabase table
+- [ ] Delete an appointment → verifies it's removed from DB and dashboard
+- [ ] Set appointment time to 60 minutes from now → wait for scheduler → verify reminder sent and `reminder_sent = true` in DB
+
+### Edge Cases
+
+- [ ] Submit with empty name → validation error shown
+- [ ] Submit with invalid phone (`1234`) → validation error shown
+- [ ] Submit with past date → validation error shown
+- [ ] Submit form twice rapidly → only one record created (rate limiting)
+- [ ] Kill backend and refresh dashboard → error state shown with retry button
+- [ ] Create appointment 55-65 min out → confirm reminder fires once, not twice
+
+
+
 ## 🔒 Security Decisions
 
 | Concern | Implementation |
@@ -191,12 +301,14 @@ The Vite dev server proxies `/api/*` requests to `localhost:4000`, so no CORS is
 ---
 
 
+
 This project uses React + Vite on the frontend for a fast, component-based UI with CSS Modules for scoped styling. The backend is Node.js + Express — lightweight, widely understood, and easy to deploy on Render's free tier. Supabase provides a managed PostgreSQL database with a clean JavaScript SDK and no infrastructure overhead. Twilio handles SMS delivery and runs in simulation mode when credentials aren't present, so the send logic is verifiable without spending money.
 
 Data flows from the form → validated on the client → sent to the Express API → validated again server-side → inserted into Supabase → a non-blocking Twilio call fires the confirmation SMS → the frontend gets a 201 response and updates the dashboard optimistically. The reminder scheduler is a node-cron job that runs every minute and queries for appointments 55–65 minutes out with `reminder_sent = false`. Critically, it marks `reminder_sent = true` *before* calling Twilio to prevent duplicate sends even if the scheduler restarts mid-loop.
 
 The hardest part was the race condition in the scheduler: if two scheduler ticks somehow overlapped (e.g., a slow DB query causes the next tick to fire), the same reminder could send twice. The solution is a conditional Supabase update — `UPDATE ... WHERE id = ? AND reminder_sent = false` — which acts as an optimistic lock. Only one update succeeds; the other finds no rows to update and skips sending.
 
+**Time taken: approximately 10 hours** (architecture: 2h, backend: 3h, frontend: 2.5h, deployment/testing: 2h).
 
 ---
 
